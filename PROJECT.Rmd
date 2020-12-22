@@ -1,0 +1,650 @@
+---
+title: "Analyse catégorielle et factorielle des tweets dans le cadre du #deconfinement"
+output:
+  html_notebook: default
+  word_document: default
+---
+Ce projet est fait par :
+KOUIDER Amira (MLDS 21904040)
+RADOUANI Nadia (MLDS 21911973)
+BOUDJEMAI Mohamed (MLDS 21912904)
+
+
+Extraction des tweets
+
+```{r}
+#chargement des librairies
+library(twitteR)
+library(stringr)
+library(ggplot2)
+library(tidyverse)  
+library(cluster)   
+library(factoextra)
+library(ggplot2)
+library(gridExtra)
+library(tidyverse)
+library(cluster)
+library(devtools)
+library(stats)
+library(JLutils)
+library(FactoMineR)
+library(factoextra)
+library(gplots)
+library(NMF)
+```
+
+```{r}
+#clés pour la connexion
+consumer_key <- "x9XKT0nXXmE84LT9eoBAQleE9"
+consumer_secret <- "YAjWKwWrtUtJYSoFLiuy3VUCayP8c9axrpejWhN2X6BtT3JhYr"
+access_token <- "809660268-ofBigwBC9vSkplPclbFyG6tZE9nsAD2oWjqXk1AU"
+access_secret <- "g6ltImQG082K0mMpvB3WBhlbGXb3TeBc4Kh2NFiR4SIvU"
+#Créer une connexion avec Twitter
+setup_twitter_oauth(consumer_key, consumer_secret, access_token, access_secret)
+```
+
+```{r}
+#récupération des tweets
+tweets <- searchTwitter("#deconfinement",n=2000,lang="fr")
+```
+
+
+```{r}
+#affichage d'un tweet en utilisant un index
+print(tweets[[1]])
+print(tweets[[2000]])
+```
+
+Stockage des tweets dans une structure data.frame
+
+```{r}
+#copier la liste dans une structure data.frame
+data <- twListToDF(tweets)
+
+#sauvegarde de la structure data.frame
+write.table(data,"tweets.txt",sep="\t",quote=F)
+
+#Sauvegarder en fichier csv
+write.csv ( data,"C:/Users/NADIA/Desktop/M1 MLSD/S2/DATA SCIENCE/PROJET/TwitterTweets.csv" )
+
+#dimensions
+print(dim(data))
+```
+
+```{r}
+#data <- read.csv("C:/Users/NADIA/Desktop/M1 MLSD/S2/DATA SCIENCE/PROJET/TwitterTweets.csv")
+```
+
+
+```{r}
+#les variables de la base
+print(colnames(data))
+```
+
+```{r}
+#aperçu de la base
+print(data[1:10,c('created','screenName','isRetweet','retweeted','retweetCount')])
+```
+
+Analyse descriptive:
+
+```{r}
+#comptage du nombre de message par auteurs 
+comptage <- table(data$screenName)
+#tri décroissant 
+comptage <- sort(comptage,decreasing=TRUE)
+#affichage des 10 premiers 
+print(comptage[1:10])
+print(length(unique(data$screenName)))
+```
+
+```{r}
+#Nous pouvons représenter graphiquement la liste des auteurs ayant envoyé 5 messages ou plus.
+#nous utilisons la variable comptage définie précédemment 
+barplot(comptage [comptage >= 5], las = 2,cex.names=0.7,col="cornsilk")
+```
+
+```{r}
+#liste des messages originaux
+id_originaux <- which(!data$isRetweet)
+#nombre de messages originaux
+print(length(id_originaux))
+```
+
+```{r}
+#comptage du nombre de message par auteurs
+comptage_bis <- table(data$screenName[id_originaux])
+#tri décroissant
+comptage_bis <- sort(comptage_bis,decreasing=TRUE)
+#graphique de ceux qui ont plus de 3 (inclus) messages
+barplot(comptage_bis [comptage_bis >= 3], las = 2,cex.names=0.7, col = "tan")
+```
+
+```{r}
+#numéro des messages qui sont des retweets
+idRetweets <- which(data$isRetweet) 
+#vecteur du compteur de retweet
+#pour les messages retweetés
+nombre_retweets <- data$retweetCount[idRetweets]
+#index de tri décroissant selon le nombre
+index <- order(nombre_retweets,decreasing=TRUE) 
+#2 premiers messages avec des auteurs et des identifiants différents
+print(data[data$isRetweet,][index[1:2],c('screenName','id','retweetCount')])
+```
+
+```{r}
+#mais qui correspondent au même texte
+print(data[data$isRetweet,][index[1:2],c('text')])
+```
+
+```{r}
+#récupération du data.frame trié selon le nombre de retweets
+#on ne travaille que sur les retweets (df$isRetweet)
+dfRetweet <- data[data$isRetweet,][index,]
+
+#première occurrence de chaque exemplaire de tweet
+first <- !duplicated(dfRetweet$text)
+
+#affichage des $2$ premiers éléments
+print(dfRetweet$text[first][1:2])
+```
+
+```{r}
+#affichage de leur nombre de répétition
+print(dfRetweet$retweetCount[first][1:2])
+```
+
+```{r}
+#data.frame correspondant aux premières occurrences 
+dfFirst <- dfRetweet[first,] 
+
+#graphique du nombre de retweets des messages les plus populaires
+barplot(dfFirst$retweetCount[1:15], names.arg= dfFirst$id[1:15],las = 2,cex.names=0.7)
+```
+
+```{r}
+# afficher l'histogramme des fréquences du nombre de retweets.
+hist(dfFirst$retweetCount,main="Histogramme",col="slategray2",xlab="Nombre de retweets")
+```
+
+
+Analyse des thèmes et des individus
+
+Dans cette partie nous allons anlayser les thèmes à travers les # et les individus à travers les @ apparaissant dans les messages, mais dans un premier temps il faut faire un nettoyage des tweets qui passe par plusieurs étpes:
+
+Etap 01: Elimination des doublons
+
+```{r}
+#data.frame avec les messages uniques
+data2 <- data[!duplicated(data$text),]
+#nombre de tweets concernés
+print(nrow(data2))
+```
+
+Nous avons obtenu une base de 1134 messages uniques que nous allons stoquer dans un vecteur
+
+```{r}
+#vecteur avec les messages uniques
+mvecteur <- data2$text
+#taille du vecteur
+print(length(mvecteur))
+```
+
+```{r}
+#affichage de l'un des messages
+print(mvecteur[18])
+```
+
+Etape 02: premier cleaning
+
+```{r}
+#suppression du saut de ligne \n
+mvectClean <- gsub("\n"," ",mvecteur)
+
+#suppression des URL
+mvectClean <- gsub('http\\S+\\s*',"",mvectClean)
+
+#suppression des espaces en trop
+mvectClean <- gsub("\\s+"," ",mvectClean)
+
+#suppression des "\"
+mvectClean <- gsub("[\\]","",mvectClean)
+
+#suppression des espaces en fin de texte
+mvectClean <- gsub("\\s*$","",mvectClean)
+
+#tout mettre en minuscule
+mvectClean <- tolower(mvectClean)
+
+#retrait de l'indicateur de retweet
+mvectClean <- gsub("rt ","",mvectClean)
+
+#retrait de &amp
+mvectClean <- gsub("&amp", "", mvectClean)
+
+#retrait des accents
+mvectClean <- gsub("[àâ]","a",mvectClean)
+mvectClean <- gsub("[éèê]","e",mvectClean)
+mvectClean <- gsub("[ùû]","u",mvectClean)
+mvectClean <- gsub("[ç]","c",mvectClean)
+mvectClean <- gsub("[ô]","o",mvectClean)
+mvectClean <- gsub("[î]","i",mvectClean)
+
+#vérification avec le document n°18
+print(mvectClean[18])
+```
+
+Après ce premier nettoyage, nous remarquons que certains messages ne diffèrent que par l'URL qu'ils contenaient. Du fait,  il se peut qu'on ait encore des dublons, que nous devons supprimer.
+
+```{r}
+#enlever les doublons
+mvectClean <- mvectClean[!duplicated(mvectClean)]
+
+#nombre de messages
+print(length(mvectClean))
+```
+
+Nous avons passé de 1134 messages à 1077, donc ça confirme que nous avions vraiment des doublons qu'il a fallu supprimer.
+
+analyse des thèmes
+
+Il s'agit de l'analyse des hashtag, nous allons donc les selectionner et les stocker dans uen vecteur, un mot est un hashtag s'il debute par #.
+
+```{r}
+#les mots délimtés par des ESPACE
+mots <- unlist(strsplit(mvectClean," "))
+
+#détecter les hashtag parmi les mots recupérés
+hashtag <- regexpr("^#[[:alnum:]_]*",mots)
+
+#récupérer les hashtag
+themes <- regmatches(mots,hashtag)
+
+#nombre de hashtags collectés
+print(length(themes))
+```
+
+analysons maintenant les hashtags collectés et commençons par afficher les 15 hashtags les plus populaires
+
+```{r}
+#fréquence d'apparition des hashtags
+hashtagNB <- table(themes)
+
+#tri selon la fréquence décroissante
+sorthashtagNB <- sort(hashtagNB,decreasing=TRUE)
+
+#affichage des 15 hastags les plus populaires
+print(sorthashtagNB[1:15])
+```
+
+Affichons maintenant les thèmes sous forme de wordcloud.
+Nous allons exclure #quarantine car c'est le mot clès utilisé pour l'extraction des tweets et donc ce n'est pas évident de l'afficher dans le wordcloud.
+
+```{r}
+#install.packages("RColorBrewer")
+#chargement de la librairie
+library(wordcloud)
+
+#affichage
+wordcloud(names(sorthashtagNB)[-1],sorthashtagNB[-1],scale=c(3,.5),colors=brewer.pal(6, "Dark2"))
+```
+
+le deuxième thème le plus fréquent est "covid19" et c'est tout à fait évident car le thème principal que nous sommes en train d'étudier est le déconfinement.
+
+Analyse des individus
+
+les individus apparaissent dans les messages retweetés, ou quand ils sont cités nommément,  ils sont repérés par un @.
+
+```{r}
+#détecter les individus parmi les mots recupérés précédemment
+individu <- regexpr("^@[[:alnum:]_]*",mots)
+
+#récupérer l'ensemble des individus
+listeIndividus <- regmatches(mots,individu)
+
+#nombre des individus 
+print(length(listeIndividus))
+```
+
+Nous pouvons repéré les noms d'auteurs apparaissant le plus fréquement dans les messages.
+
+```{r}
+#nombre d'apparition des individus
+individusNB <- table(listeIndividus)
+
+#tri selon la fréquence décroissante
+sortIndividusNB <- sort(individusNB,decreasing=TRUE)
+
+#affichage des 15 auteurs les plus fréquents
+print(sortIndividusNB[1:15])
+```
+
+
+Analyse catégorielle: k-means
+
+Pour pouvoir effectuer cet analyse nous devons construire une matrice documents-termes, ceci passe par plusieurs étapes de cleaning que nous avons commencé précédement, afin de garder uniquemnt les terms qui donnent un sens au message et construire un dictionnaire de mots pertinents.
+
+Continuons avec les cleaning
+
+```{r}
+#retrait des pseudos
+mvectClean2 <- gsub("@[[:alnum:]_]*( |:|$)","",mvectClean)
+
+#supprimer les mots liés aux retweets
+mvectClean2 = str_replace_all(mvectClean2, "(RT|via)((?:\\b\\W*@\\w+)+)", " ")
+
+#supprimer les caractères particuliers
+ ## retour chariot
+mvectClean2 = str_replace_all(mvectClean2,"\r", " ")
+ ## émoticônes
+mvectClean2 = sapply(mvectClean2,function(x) iconv(x, "latin1", "ASCII", sub=""))
+ ## la ponctuation
+mvectClean2 = str_replace_all(mvectClean2, "[[:punct:]]", " ")
+ ## les nombres
+mvectClean2 = str_replace_all(mvectClean2, "[[:digit:]]", " ")
+
+ ## les lien HTML
+mvectClean2 = str_replace_all(mvectClean2,"https.*", " ")
+
+# les espaces inutiles
+ ## plus de deux espaces dans le tweet
+mvectClean2 = str_replace_all(mvectClean2, "[\t]{2,}", " ")
+ ## espaces de début de tweet
+mvectClean2 = str_trim(mvectClean2)
+
+#vérification avec le document n°15
+print(mvectClean2[18])
+```
+
+Transformation du vecteur de tweets en un format "Corpus"
+
+```{r}
+#importation de la libraire
+library(NLP)
+library(tm)
+
+#transformation de la liste des tweets en un format interne
+docs <- Corpus(VectorSource(mvectClean2))
+#docs <- iconv(x = docs,"latin1","ASCII",sub = "")
+print(docs)
+```
+
+Une dernière étape du cleaning sera effectuée sur le corpus
+
+```{r}
+#retrait des ponctuations
+docs <- tm_map(docs,removePunctuation)
+
+#retrait des nombres
+docs <- tm_map(docs,removeNumbers)
+
+#retrait des stopwords (mots outils)
+docs <- tm_map(docs,removeWords,stopwords("french"))
+
+#retirer les espaces en trop
+docs <- tm_map(docs,stripWhitespace)
+
+#vérification avec le document n°18
+print(docs[[18]]$content)
+```
+
+Création de la matrice documents-termes
+
+```{r}
+#création de la MDT à partir du corpus
+docTerms <- DocumentTermMatrix(docs,control=list(weighting=weightBin))
+print(docTerms)
+```
+
+Vérification des mots
+
+```{r}
+#termes apparaissant au moins 40 fois
+print(findFreqTerms(docTerms,40))
+```
+
+Les resultats obtenus sont en cohérence avec notre thème #quarantine
+
+Visualisons maintenant les mots les plus fréquents par un plot, avant de faire celà et afin de manipuler facilement l'objet docTerms, nous le transformons en une matrice pleine
+
+```{r}
+#transformation en matrice pleine
+mdocTerms <- as.matrix(docTerms)
+print(dim(mdocTerms))
+```
+
+```{r}
+#frequence des mots
+mfrequent <- colSums(mdocTerms)
+mfrequent <- subset(mfrequent, mfrequent >=40)
+df <- data.frame(term = names(mfrequent), freq = mfrequent)
+
+#visualisation des mots fréquents
+ggplot(df,aes(x = reorder(df$term, +df$freq), y = freq, fill=df$freq)) + geom_bar(stat = "identity") +
+  scale_colour_gradientn(colors = terrain.colors(10)) + xlab("Terms") + ylab("Count") + coord_flip()
+```
+
+Nous éliminons ensuite les mots qui sont peu fréquents (apparaissent moins de 2 fois)
+
+```{r}
+#termes n'apparaissant qu'une fois
+mfrequent2 <- colSums(mdocTerms)
+print(length(which(mfrequent2<=2)))
+```
+
+```{r}
+#ne conserver que les termes apparaissant plus de 2 fois dans la matrice
+docTermsClean <- mdocTerms[,colSums(mdocTerms) > 2]
+print(dim(docTermsClean))
+```
+
+Finalement, nous avons 780 mots pertinents et nous pouvons ainsi appliquer l'algorithme k-means sur notre matrice document-termes finale.
+
+Algorithme du k-means
+
+Avant d'appliquer l'algorithme du k-means, nous devons choisir le nombre du clusters k, plusiers méthodes existent afin de nous faciliter ce choix:
+
+Méthode de silhouette:
+
+```{r}
+fviz_nbclust(docTermsClean, kmeans, method = "silhouette")
+```
+
+La méthode de silhouette nous suggère de choisir 6 clusters.
+
+Méthode Elbow
+
+```{r}
+set.seed(123)
+
+fviz_nbclust(docTermsClean, kmeans, method = "wss")
+```
+
+D'après le resultat de la méthode Elbow, on peut opter pour 4 clusters.
+
+nous pouvons aussi visualiser les résultats du k-means en essayons différents k:
+
+```{r}
+#centrer et réduire les données
+#pour éviter que les variables à forte variance pèsent indûment sur les résultats
+docTermsClean <- scale(docTermsClean)
+
+#k-means
+k2 <- kmeans(docTermsClean, centers = 2, nstart = 25)
+k3 <- kmeans(docTermsClean, centers = 3, nstart = 25)
+k4 <- kmeans(docTermsClean, centers = 4, nstart = 25)
+k5 <- kmeans(docTermsClean, centers = 5, nstart = 25)
+k6 <- kmeans(docTermsClean, centers = 6, nstart = 25)
+
+
+#visualiser et comparer
+p1 <- fviz_cluster(k2, geom = "point", data = docTermsClean) + ggtitle("k = 2")
+p2 <- fviz_cluster(k3, geom = "point",  data = docTermsClean) + ggtitle("k = 3")
+p3 <- fviz_cluster(k4, geom = "point",  data = docTermsClean) + ggtitle("k = 4")
+p4 <- fviz_cluster(k5, geom = "point",  data = docTermsClean) + ggtitle("k = 5")
+p5 <- fviz_cluster(k6, geom = "point",  data = docTermsClean) + ggtitle("k = 6")
+
+grid.arrange(p1, p2, p3, p4,p5, nrow = 2)
+```
+
+D'après les résultats de cette visualisation ainsi que les deux méthodes du choix de k, nous avons décidé d'opter pour k=4.
+
+```{r}
+set.seed(123)
+k <- 4
+kmeansResults <- kmeans(docTermsClean,k, nstart = 25)
+str(kmeansResults)
+```
+
+Determinons maintenant les caractéristiques de chaque cluster
+
+```{r}
+for (i in 1:k){
+  cat(paste("cluster",i,":",sep=""))
+  s <- sort(kmeansResults$centers[i,],decreasing = T)
+  cat(names(s)[1:15],"\n")
+}
+```
+
+Classification ascendante hiérarchique
+
+```{r}
+docTermsCleanbis <- mdocTerms[,colSums(mdocTerms) > 2]
+set.seed(123)
+#supprimer les valeurs manquantes
+docTermsCleanbis <- na.omit(docTermsCleanbis)
+
+#centrer et réduire les données
+docTermsCleanbis <- scale(docTermsCleanbis)
+
+#matrice de dissimilarité
+mdist <- dist(docTermsCleanbis, method = "euclidean")
+
+# Hierarchical clustering using Complete Linkage
+hc <- hclust(mdist, method = "ward" )
+
+#dendrogramme
+plot(hc, labels = FALSE, main = "Dendrogramme")
+```
+Afin de décider à quel niveau on peut couper l'arbre, nous allons repérer les sauts d'inertie du dendrogramme selon le nombre de classes retenues.
+
+```{r}
+inertie <- sort(fit$height, decreasing = TRUE)
+plot(inertie[1:20], type = "s", xlab = "Nombre de classes", ylab = "Inertie")
+```
+On remaqure 2 sauts assez nets: 2 et 4 classes que nous pouvons representer ci-dessous en vert et en rouge respectivement.
+
+```{r}
+plot(inertie[1:20], type = "s", xlab = "Nombre de classes", ylab = "Inertie")
+points(c(2, 4), inertie[c(2, 4)], col = c("green3", "red3"), cex = 2, lwd = 3)
+```
+
+Par ailleurs, il existe une autre méthode pour trouver la meileur partition, il s'agit de la fonction "best.cutree" qui permet de calculer cet indicateur à partir de n’importe quel dendrogramme calculé avec hclust ou agnes. (cette fonction est proposée par l’extension JLutils (disponible sur GitHub))
+
+```{r}
+#install_github("larmarange/JLutils")
+#best.cutree(hc, min=2)
+best.cutree(hc, min=2, graph = TRUE, xlab = "Nombre de classes", 
+  ylab = "Inertie relative")
+```
+
+D'après les sauts repérés et le resultat de la fonction best.cutree, nous optons pour une partition de 2 classes.
+
+```{r}
+set.seed(123)
+# couper l'arbre en 2 groupes
+sub_grp <- cutree(hc, k = 2)
+
+# nombre de documents dans chaque classe
+table(sub_grp)
+```
+
+```{r}
+#couper l'arbre en deux classes
+plot(hc, cex = 0.6)
+rect.hclust(hc, k = 2, border = 2:5)
+```
+
+
+```{r}
+sub_grp <- cutree(hc, k = 2)
+fviz_cluster(list(data = docTermsCleanbis, cluster = sub_grp))
+```
+
+
+Analyse catégorielle:
+
+AFC
+
+Dans cette analyse, nous allons garder uniquement les mots les plus fréquents, ceux qui apparaissent plus de 20 fois (vu que nous avons beaucoup de mots).
+
+```{r}
+docTermsCleanAFC <- mdocTerms[,colSums(mdocTerms) > 20]
+```
+
+```{r}
+#calculer l'AFC
+CA (docTermsCleanAFC, ncp = 5, graph = TRUE)
+res.ca <- CA (docTermsCleanAFC, graph = FALSE)
+print(res.ca)
+```
+
+Visualisation et interprétation
+
+Nous allons nous intéresser aux colonnes (les mots)
+
+```{r}
+#extraire les résultats pour les colonnes
+col <- get_ca_col(res.ca)
+col
+```
+
+Accéder aux différents composants
+
+```{r}
+# Coordonnées
+head(col$coord)
+# Qualité de représentation
+head(col$cos2)
+# Contributions
+head(col$contrib)
+```
+
+```{r}
+print(col$coord)
+```
+
+Graphiques: qualité et contribution
+
+```{r}
+#graphique des colonnes
+fviz_ca_col (res.ca)
+```
+
+
+
+```{r}
+#Les points colonnes en fonction de leurs cos2
+fviz_ca_col (res.ca, col.col = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE)
+```
+
+```{r}
+#bar plot du cos2 des colonnes
+fviz_cos2 (res.ca, choice = "col", axes = 1:2)
+```
+
+```{r}
+#la contribution des colonnes aux deux premières dimensions
+fviz_contrib (res.ca, choice = "col", axes = 1:2)
+```
+
+
+
+
+
+
+
+
+
